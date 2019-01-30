@@ -49,15 +49,16 @@ fromMessage (IncomingMessage c u "force new") = Just $ ForceNew (ChannelId c) (U
 fromMessage (IncomingMessage c _ "status") = Just $ Status (ChannelId c)
 fromMessage _ = Nothing
 
-data InChannel = InChannel deriving (Eq, Show)
+data ResponseType = InChannel | Ephemeral deriving (Eq, Show)
 
-instance ToJSON InChannel where 
+instance ToJSON ResponseType where 
   toJSON InChannel = String "in_channel"
+  toJSON Ephemeral = String "ephemeral"
 
 data MessageResponse = MessageResponse
   {
     response_text :: String
-  , response_type :: InChannel
+  , response_type :: ResponseType
   } deriving (Eq, Show)
 
 instance ToJSON MessageResponse where
@@ -107,7 +108,7 @@ messageRoute :: TVar GameState -> IncomingMessage -> Handler MessageResponse
 messageRoute state msg = liftIO $ do
   let command = fromMessage msg
   case command of
-    Nothing -> return $ MessageResponse ("Invalid command " ++ show (text msg)) InChannel
+    Nothing -> return $ MessageResponse ("Invalid command " ++ show (text msg)) Ephemeral
     Just (Add c p) -> atomically $ do
       s <- readTVar state
       let newState = insertWith (<>) c (One p) s
