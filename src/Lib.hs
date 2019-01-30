@@ -18,23 +18,26 @@ import GHC.Generics
 import Web.FormUrlEncoded (FromForm)
 import qualified Data.Text as T
 import Data.Maybe (fromMaybe)
-import Data.List (delete)
+import Data.List (delete, nub)
 import Data.Map hiding (delete)
 import Control.Concurrent.STM
 import Control.Concurrent.STM.TVar
 import Control.Monad.IO.Class
 
 data IncomingMessage = IncomingMessage
-  { channel_id :: T.Text
-  , user_id :: T.Text
-  , text :: T.Text
+  { channel_id :: String
+  , user_id :: String
+  , text :: String
   } deriving (Eq, Show, Generic)
 
 instance FromForm IncomingMessage
 
-newtype ChannelId = ChannelId T.Text deriving (Eq, Show, Ord)
+newtype ChannelId = ChannelId String deriving (Eq, Show, Ord)
 
-newtype UserId = UserId T.Text deriving (Eq, Show)
+newtype UserId = UserId String deriving (Eq, Ord)
+
+instance Show UserId where
+  show (UserId x) = "@" ++ x
 
 data Command = 
   Add ChannelId UserId |
@@ -57,18 +60,23 @@ instance ToJSON ResponseType where
 
 data MessageResponse = MessageResponse
   {
-    response_text :: String
-  , response_type :: ResponseType
-  } deriving (Eq, Show)
+    gameState :: Either String ChannelPlayers
+  , responseType :: ResponseType
+  } deriving Show
 
 instance ToJSON MessageResponse where
-  toJSON (MessageResponse txt t) = object ["text" .= txt, "response_type" .= t]
+  toJSON (MessageResponse s t) = object ["text" .= s, "response_type" .= t]
 
 type API = "message" :> ReqBody '[FormUrlEncoded] IncomingMessage :> Post '[JSON] MessageResponse
 
 data ChannelPlayers = 
-  Zero | One UserId | Two UserId UserId | Three UserId UserId UserId | Four UserId UserId UserId UserId
-  deriving Show
+  Zero | One UserId | Two UserId UserId | Three UserId UserId UserId | Four UserId UserId UserId UserId 
+  deriving (Eq, Show)
+
+instance ToJSON ChannelPlayers where
+  toJSON Zero = String "No game is on"
+  toJSON s@Four{} = String $ T.concat ["Game on! Players ", T.pack . show $ fmap show (players s)]
+  toJSON s = String $ T.concat ["Current players: ", T.pack . show $ fmap show (players s)]
 
 players :: ChannelPlayers -> [UserId]
 players Zero = []
@@ -86,7 +94,7 @@ toPlayers [p1, p2, p3, p4] = Four p1 p2 p3 p4
 toPlayers (p1:p2:p3:p4:ps) = toPlayers ps
 
 instance Semigroup ChannelPlayers where
-  x <> y = toPlayers $ (players x) ++ (players y)
+  x <> y = toPlayers $ nub ((players x) ++ (players y))
 
 type GameState = Map ChannelId ChannelPlayers
 
@@ -108,27 +116,32 @@ messageRoute :: TVar GameState -> IncomingMessage -> Handler MessageResponse
 messageRoute state msg = liftIO $ do
   let command = fromMessage msg
   case command of
-    Nothing -> return $ MessageResponse ("Invalid command " ++ show (text msg)) Ephemeral
+    Nothing -> return $ MessageResponse (Left $ "Invalid command " ++ show (text msg)) Ephemeral
     Just (Add c p) -> atomically $ do
       s <- readTVar state
-      let newState = insertWith (<>) c (One p) s
+      let oldChannelState = fromMaybe Zero (s !? c)
+      let newChannelState = oldChannelState <> One p
+      let newState = insert c newChannelState s
       writeTVar state newState
-      return newState
-      >>= \s -> return $ MessageResponse (show s) InChannel
+      let response = if newChannelState == oldChannelState 
+                     then MessageResponse (Left $ "Player " ++ show p ++ " already in the game.") Ephemeral
+                     else MessageResponse (Right newChannelState) InChannel
+      return response
     Just (Remove c p) -> atomically $ do
       s <- readTVar state
-      let newState = adjust (`removePlayer` p) c s
+      let oldChannelState = fromMaybe Zero (s !? c)
+      let newChannelState = oldChannelState `removePlayer` p
+      let newState = insert c newChannelState s
       writeTVar state newState
-      return newState
-      >>= \s -> return $ MessageResponse (show s) InChannel
+      return $ MessageResponse (Right newChannelState) InChannel
     Just (ForceNew c p) -> atomically $ do
       s <- readTVar state
-      let newState = insert c (One p) s
+      let newChannelState = One p
+      let newState = insert c newChannelState s
       writeTVar state newState
-      return newState
-      >>= \s -> return $ MessageResponse (show s) InChannel
+      return $ MessageResponse (Right newChannelState) InChannel
     Just (Status c) -> atomically $ readTVar state
-      >>= \s -> return $ MessageResponse (show s) InChannel
+      >>= \s -> return $ MessageResponse (Right (fromMaybe Zero (s !? c))) InChannel
 
 server :: TVar GameState -> Server API
 server = messageRoute 
