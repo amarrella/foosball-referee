@@ -24,6 +24,8 @@ import Control.Concurrent.STM
 import Control.Concurrent.STM.TVar
 import Control.Monad.IO.Class
 import System.Random.Shuffle
+import Text.Read (readMaybe)
+import System.Environment (lookupEnv)
 
 data IncomingMessage = IncomingMessage
   { channel_id :: String
@@ -103,8 +105,11 @@ removePlayer s u = toPlayers $ delete u (players s)
 
 startApp :: IO ()
 startApp = do 
+  portEnv <- lookupEnv "PORT"
+  let portMaybe = portEnv >>= (readMaybe :: String -> Maybe Int)
+  let port = fromMaybe 8080 portMaybe
   gameState <- atomically $ newTVar (empty :: GameState)
-  run 8080 (app gameState)
+  run port (app gameState)
 
 app :: TVar GameState -> Application
 app s = serve api (server s)
