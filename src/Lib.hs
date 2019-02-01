@@ -125,7 +125,7 @@ messageResponse (Left s) = return $ MessageResponse s Ephemeral
 messageResponse (Right s@Four{}) = do
   shuffled <- shuffleM (players s)
   let response = case shuffled of 
-        [p1, p2, p3, p4] -> "Game on! " ++ show $ Match (Team p1 p2) (Team p3 p4)
+        [p1, p2, p3, p4] -> "Game on! " ++ (show $ Match (Team p1 p2) (Team p3 p4))
         _ -> show "Invalid number of players for match" -- TODO: replace with compile time guarantee
   return $ MessageResponse response InChannel
 messageResponse (Right s) = return $ MessageResponse (show s) InChannel
